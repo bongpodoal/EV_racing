@@ -82,19 +82,22 @@ Arduino Due + `due_can` 라이브러리. Golden Motor "EZkontrol MCU to VCU CAN 
 
 ## Commands
 
-ROS2는 이 개발 환경에 아직 설치되어 있지 않다. Ubuntu 22.04이므로 ROS2 Humble 설치 필요:
+ROS2 Humble(`ros-base` + `ros-dev-tools`, RViz/Gazebo 없는 경량 설치 — 디스크 여유가 없어 desktop
+대신 이걸 선택함)이 설치되어 있다. **주의**: 이 머신은 `~/.bashrc`에서 miniforge(conda)를 자동
+활성화하는데, conda의 python3(3.13)가 PATH 앞쪽을 차지해 ROS2용 시스템 python3(3.10, `em`/
+`serial` 모듈이 여기 있음)를 가린다. 그래서 ROS2 관련 명령은 항상 `/usr/bin`을 PATH 앞에 두고
+실행해야 한다 (안 그러면 `colcon build`가 `No module named 'em'`으로 실패함):
 
 ```bash
-# ROS2 Humble 설치 (미설치 상태, 최초 1회)
-sudo apt install ros-humble-desktop  # apt 저장소 등록 필요 시 공식 문서 참고
+source /opt/ros/humble/setup.bash
 
-# 워크스페이스 빌드
+# 워크스페이스 빌드 (검증 완료, 2026-08-12: 5개 패키지 정상 빌드)
 cd ros2_ws
-colcon build --symlink-install
+PATH=/usr/bin:/usr/local/bin:/usr/sbin:/sbin:/bin:$PATH colcon build --symlink-install
 source install/setup.bash
 
-# 전체 스택 실행 (카메라/라이다 드라이버는 별도 실행 필요)
-ros2 launch ev_bringup ev_stack_launch.py
+# 전체 스택 실행 (카메라/라이다 드라이버는 별도 실행 필요, 검증 완료: 노드 3개 정상 기동)
+PATH=/usr/bin:/usr/local/bin:/usr/sbin:/sbin:/bin:$PATH ros2 launch ev_bringup ev_stack_launch.py
 ```
 
 아두이노 펌웨어는 Arduino IDE(1.8.19, snap 설치됨: `arduino`)로 `firmware/EZkontrol_RearDrive_CAN/
@@ -103,13 +106,14 @@ EZkontrol_RearDrive_CAN.ino`를 열어 컴파일/업로드한다. 필요 라이�
 
 자동화된 테스트는 없다. `ev_perception`/`ev_planning`의 순수 로직(각도 필터링, 정지 판단)은
 REPL에서 바로 검증 가능하고, 아두이노/CAN 왕복과 시리얼 브릿지는 실물 하드웨어(EZkontrol
-컨트롤러, CAN 트랜시버, Due 보드)가 있어야 검증 가능하다.
+컨트롤러, CAN 트랜시버, Due 보드)가 있어야 검증 가능하다. 단, 아두이노 스케치는 실제 Due 보드
+타겟(`arduino:sam:arduino_due_x_dbg`)으로 `--verify` 컴파일까지는 통과했다(2026-08-12).
 
 ## 현재 상태 / TODO
 
-- [x] 후륜구동계 CAN 제어 아두이노 펌웨어 (핸드셰이크, 명령 인코딩, 텔레메트리 디코딩, 안전 워치독)
+- [x] 후륜구동계 CAN 제어 아두이노 펌웨어 (핸드셰이크, 명령 인코딩, 텔레메트리 디코딩, 안전 워치독) — Due 보드 대상 컴파일 검증 완료
 - [x] ROS2 인지→판단→아두이노 브릿지 3단계 스캐폴드 (메시지, 노드, launch)
-- [ ] ROS2 Humble 설치 및 실제 colcon 빌드 검증 (아직 빌드된 적 없음, 문법 오류 가능성 있음)
+- [x] ROS2 Humble(ros-base) 설치 및 colcon 빌드 검증 (2026-08-12, 5개 패키지 모두 빌드/임포트/launch 성공 — arduino_bridge_node는 하드웨어 미연결로 `/dev/ttyACM0` 없다는 예상된 에러만 남기고 종료)
 - [ ] 카메라 라바콘 인식(`~/Desktop/EV_formula_camera`)을 `ev_perception`에 노드로 통합
 - [ ] 라이다 드라이버(rplidar_ros 등) 및 카메라 드라이버를 `ev_bringup` launch에 추가
 - [ ] `ev_planning`에 실제 트랙 추종/조향 로직 추가 (현재 조향은 항상 0)
