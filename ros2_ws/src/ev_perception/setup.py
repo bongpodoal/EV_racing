@@ -20,6 +20,7 @@ setup(
     entry_points={
         'console_scripts': [
             'obstacle_detector_node = ev_perception.obstacle_detector_node:main',
+            'cone_detector_node = ev_perception.cone_detector_node:main',
         ],
     },
 )

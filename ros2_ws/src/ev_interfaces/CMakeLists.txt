@@ -8,6 +8,8 @@ find_package(std_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ObstacleInfo.msg"
   "msg/VehicleCommand.msg"
+  "msg/Cone.msg"
+  "msg/ConeArray.msg"
   DEPENDENCIES std_msgs
 )
 

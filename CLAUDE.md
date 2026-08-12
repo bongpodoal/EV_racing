@@ -8,14 +8,12 @@
 CAN 통신으로 후륜구동 모터드라이브에 전달하는 3단계 파이프라인의 자율주행 EV 프로젝트.
 
 ```
-[카메라 + 라이다] --(/scan, 추후 /camera)--> [ROS2 인지: ev_perception]
-                                                    |  /perception/obstacle (ObstacleInfo)
-                                                    v
-                                          [ROS2 판단: ev_planning]
-                                                    |  /vehicle_cmd (VehicleCommand)
-                                                    v
-                                    [ROS2 브릿지: ev_arduino_bridge] --(USB 시리얼)-->
-                                    [Arduino Due 펌웨어] --(CAN)--> [EZkontrol B481000] --> [HPM10KW 모터]
+[RPLidar A3M1]  --/scan-->       [obstacle_detector_node] --/perception/obstacle-->\
+                                                                                      [planning_node] --/vehicle_cmd--> [arduino_bridge_node]
+[v4l2 카메라]   --/image_raw-->  [cone_detector_node]      --/perception/cones---->/        |
+                                                                                       (USB 시리얼)
+                                                                                              v
+                                          [Arduino Due 펌웨어] --(CAN)--> [EZkontrol B481000] --> [HPM10KW 모터]
 ```
 
 **주의**: 홈 디렉토리의 `~/github/henes`(GPS RTK + Pure Pursuit 웨이포인트 주행, H-브리지 모터,
@@ -49,17 +47,36 @@ Function Code 0x03/0x06 구조 포함). 조향/브레이크 제어 노드·아�
 - **`ev_interfaces`** (ament_cmake) — 커스텀 메시지
   - `ObstacleInfo.msg`: `header`, `obstacle_detected`, `distance_m`, `angle_rad`
   - `VehicleCommand.msg`: `enable`, `throttle_percent`, `steering_deg`, `brake_percent`
-- **`ev_perception`** (ament_python) — `obstacle_detector_node`: `/scan`(LaserScan) 구독, 정면
-  각도창(기본 ±60°) 안 최근접 장애물 거리를 `/perception/obstacle`로 발행. 카메라 라바콘 색상
-  인식(`~/Desktop/EV_formula_camera` 참고: 오른쪽=파란색, 왼쪽=노란색 HSV)은 **아직 미통합** (TODO).
-- **`ev_planning`** (ament_python) — `planning_node`: `/perception/obstacle` 구독, 20Hz로
-  `/vehicle_cmd` 발행. 현재 로직은 "정지거리 안에 장애물이면 정지, 아니면 고정 크루즈 스로틀로
-  직진"뿐이다. 조향(라바콘 트랙 추종 등)은 항상 0으로 나간다 (TODO).
+  - `Cone.msg`: `color`("YELLOW"/"BLUE"), `side`("LEFT"/"RIGHT"/"CENTER"), `side_ok`, `cx`, `cy`, `area`
+  - `ConeArray.msg`: `header`, `image_width`, `Cone[] cones`
+- **`ev_perception`** (ament_python)
+  - `obstacle_detector_node`: `/scan`(LaserScan) 구독, 정면 각도창(기본 ±60°) 안 최근접 장애물
+    거리를 `/perception/obstacle`로 발행.
+  - `cone_detector_node`: `/image_raw`(sensor_msgs/Image, v4l2_camera_node 기본 토픽) 구독,
+    `cv_bridge`로 OpenCV 프레임 변환 후 `cone_detection.detect_cones()`로 라바콘(YELLOW=왼쪽 기대,
+    BLUE=오른쪽 기대)을 검출해 `/perception/cones`로 발행.
+  - `cone_detection.py`: `~/Desktop/EV_formula_camera`에서 그대로 포팅한 순수 HSV 검출 로직
+    (`build_masks`/`find_cones`/`classify_side`/`detect_cones`) — 카메라 캡처는 이 파일에 없고
+    ROS2 Image 구독(`cone_detector_node`)이 대신한다. HSV 임계값·면적·종횡비 기준은 원본 그대로.
+- **`ev_planning`** (ament_python) — `planning_node`: `/perception/obstacle` + `/perception/cones`
+  구독, 20Hz로 `/vehicle_cmd` 발행. 우선순위: **라이다 장애물 정지 > 콘 트랙 추종**.
+  - 트랙 추종: 면적이 가장 큰(=가장 가까운) YELLOW/BLUE 콘 쌍의 이미지 x좌표 중점으로 조향각 계산
+    (`_compute_steering_deg`). 한쪽만 보이면 `assumed_track_half_width_px`만큼 반대쪽에 게이트가
+    있다고 가정. 둘 다 안 보이면(코너 진입 등) `search_throttle_percent`로 감속 직진.
+  - 인지 자체가 끊기면(라이다든 카메라든 `perception_timeout_s` 초과) 무조건 정지 — 안전 기본값.
+  - `max_steer_deg` 기본 25°는 실측값이 아니라 `henes_control.ino`의 실측 최대 조향각(±25°)을
+    임시로 참고한 자리표시값이다 (TODO: EV_racing 실차로 교체).
 - **`ev_arduino_bridge`** (ament_python) — `arduino_bridge_node`: `/vehicle_cmd` 구독,
   `/dev/ttyACM0`(기본, 파라미터로 변경 가능)로 `"C,<enable>,<throttle>,<steer>,<brake>\n"` 라인을
-  아두이노에 전송.
-- **`ev_bringup`** — `launch/ev_stack_launch.py`가 위 세 노드를 묶어 실행. 카메라/라이다 드라이버
-  노드(rplidar_ros, usb_cam 등)는 아직 이 launch에 없다 (TODO, 장비 확정 후 추가).
+  아두이노에 전송. `steer_deg`/`brake_percent`는 계산은 되지만 아두이노 펌웨어가 아직 안 씀(TODO).
+- **`ev_bringup`** — `launch/ev_stack_launch.py`가 드라이버 2개(`rplidar_ros`의 `rplidar_node`,
+  `v4l2_camera`의 `v4l2_camera_node`) + 앱 노드 4개를 묶어 실행. 파라미터는 실측 확인값이 기본값:
+  라이다 `/dev/ttyUSB0`/256000bps(A3M1), 카메라 `/dev/video0`.
+  **알려진 문제**: `ros-humble-rplidar-ros`(2.1.4) 패키지는 지정한 시리얼 포트가 존재하지 않으면
+  깔끔한 에러 대신 `*** buffer overflow detected ***`로 강제 종료된다(2026-08-12 재현 확인,
+  하드웨어 미연결 상태). launch 시스템은 이 크래시와 무관하게 나머지 노드는 정상 유지하지만,
+  이 노드 자체의 정상 동작 검증은 실제 A3M1을 연결해야만 가능하다 — 업스트림 버그로 보이며 이
+  저장소 코드의 문제는 아님.
 
 ### 아두이노 펌웨어 (`firmware/EZkontrol_RearDrive_CAN/`)
 
@@ -96,9 +113,12 @@ cd ros2_ws
 PATH=/usr/bin:/usr/local/bin:/usr/sbin:/sbin:/bin:$PATH colcon build --symlink-install
 source install/setup.bash
 
-# 전체 스택 실행 (카메라/라이다 드라이버는 별도 실행 필요, 검증 완료: 노드 3개 정상 기동)
+# 전체 스택 실행 (드라이버 2개 + 앱 노드 4개, 검증 완료: rplidar_node 제외 5개 정상 기동 — 위 "알려진 문제" 참고)
 PATH=/usr/bin:/usr/local/bin:/usr/sbin:/sbin:/bin:$PATH ros2 launch ev_bringup ev_stack_launch.py
 ```
+
+카메라/라이다 드라이버 + 콘 인식에 필요한 apt 패키지(2026-08-12 설치 완료):
+`ros-humble-cv-bridge`, `ros-humble-rplidar-ros`, `ros-humble-v4l2-camera`, `python3-opencv`.
 
 아두이노 펌웨어는 Arduino IDE(1.8.19, snap 설치됨: `arduino`)로 `firmware/EZkontrol_RearDrive_CAN/
 EZkontrol_RearDrive_CAN.ino`를 열어 컴파일/업로드한다. 필요 라이브러리: `due_can`(Collin80,
@@ -112,13 +132,15 @@ REPL에서 바로 검증 가능하고, 아두이노/CAN 왕복과 시리얼 브�
 ## 현재 상태 / TODO
 
 - [x] 후륜구동계 CAN 제어 아두이노 펌웨어 (핸드셰이크, 명령 인코딩, 텔레메트리 디코딩, 안전 워치독) — Due 보드 대상 컴파일 검증 완료
-- [x] ROS2 인지→판단→아두이노 브릿지 3단계 스캐폴드 (메시지, 노드, launch)
-- [x] ROS2 Humble(ros-base) 설치 및 colcon 빌드 검증 (2026-08-12, 5개 패키지 모두 빌드/임포트/launch 성공 — arduino_bridge_node는 하드웨어 미연결로 `/dev/ttyACM0` 없다는 예상된 에러만 남기고 종료)
-- [ ] 카메라 라바콘 인식(`~/Desktop/EV_formula_camera`)을 `ev_perception`에 노드로 통합
-- [ ] 라이다 드라이버(rplidar_ros 등) 및 카메라 드라이버를 `ev_bringup` launch에 추가
-- [ ] `ev_planning`에 실제 트랙 추종/조향 로직 추가 (현재 조향은 항상 0)
-- [ ] 조향계/브레이크계(L7SA, Modbus RTU) 제어 인터페이스 — 별도 아두이노 또는 RS485 브릿지 필요
+- [x] ROS2 인지→판단→아두이노 브릿지 파이프라인 스캐폴드 (메시지, 노드, launch)
+- [x] ROS2 Humble(ros-base) 설치 및 colcon 빌드 검증
+- [x] 카메라 라바콘 인식(`~/Desktop/EV_formula_camera`)을 `ev_perception`의 `cone_detector_node`로 통합 — 합성 이미지로 검출 로직 스모크 테스트 완료(2026-08-12), 실카메라/실라바콘으로는 아직 미검증
+- [x] 라이다(`rplidar_ros`) 및 카메라(`v4l2_camera`) 드라이버를 `ev_bringup` launch에 추가 — rplidar_node는 위 "알려진 문제" 있음
+- [x] `ev_planning`에 콘 게이트 중심 추종 조향 로직 추가 (`_compute_steering_deg`, 유닛 테스트로 3가지 케이스 검증: 양쪽/한쪽만/미검출)
+- [ ] 실제 라바콘 트랙에서 HSV 임계값·`assumed_track_half_width_px`·`steer_gain_deg`·`max_steer_deg` 캘리브레이션 (전부 임의값/추정값)
+- [ ] 조향계/브레이크계(L7SA, Modbus RTU) 제어 인터페이스 — 별도 아두이노 또는 RS485 브릿지 필요, `VehicleCommand.steering_deg`/`brake_percent`는 계산되지만 아직 어떤 하드웨어도 소비하지 않음
 - [ ] 벤치 테스트로 `MAX_TARGET_CURRENT_A` 단계적 상향 및 실차 검증
+- [ ] `rplidar_ros` buffer overflow가 실제 A3M1 연결 시에도 재현되는지 확인 (지금은 장치 없을 때만 확인함)
 
 ## 참고 자료
 
