@@ -1,7 +1,8 @@
 # EV_racing
 
 카메라 + 라이다 인지 → ROS2 판단/제어 → 아두이노 CAN 통신으로 후륜구동 모터드라이브를 제어하는
-자율주행 EV 프로젝트. 상세 아키텍처와 하드웨어 스펙은 [CLAUDE.md](./CLAUDE.md) 참고.
+자율주행 EV 프로젝트. 상세 아키텍처와 하드웨어 스펙은 [CLAUDE.md](./CLAUDE.md), 진행 기록은
+[CHANGELOG.md](./CHANGELOG.md) 참고.
 
 ## 구성
 
