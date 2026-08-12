@@ -5,7 +5,7 @@
 sensor_msgs/Image를 구독한다 - 원본 스크립트가 setup_camera()/read_frame()만 교체하면 카메라
 종류를 바꿀 수 있게 분리해둔 것과 같은 이유로, 카메라 하드웨어가 바뀌어도 이 노드는 그대로 쓴다.
 """
-from cv_bridge import CvBridge
+from cv_bridge import CvBridge, CvBridgeError
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
@@ -27,7 +27,14 @@ class ConeDetectorNode(Node):
         self.cone_pub = self.create_publisher(ConeArray, '/perception/cones', 10)
 
     def on_image(self, msg: Image) -> None:
-        frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        try:
+            frame = self.bridge.imgmsg_to_cv2(msg, desired_encoding='bgr8')
+        except CvBridgeError as e:
+            # 카메라 드라이버가 bgr8로 변환 불가능한 인코딩을 보내는 경우 등 - 이 프레임만 버리고
+            # 노드는 계속 살아있게 한다 (실카메라 미검증 상태라 실제로 발생할 수 있음)
+            self.get_logger().warning(f'cv_bridge conversion failed, dropping frame: {e}')
+            return
+
         detections = cone_detection.detect_cones(frame)
 
         out = ConeArray()

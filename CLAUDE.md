@@ -54,15 +54,17 @@ Function Code 0x03/0x06 구조 포함). 조향/브레이크 제어 노드·아�
     거리를 `/perception/obstacle`로 발행.
   - `cone_detector_node`: `/image_raw`(sensor_msgs/Image, v4l2_camera_node 기본 토픽) 구독,
     `cv_bridge`로 OpenCV 프레임 변환 후 `cone_detection.detect_cones()`로 라바콘(YELLOW=왼쪽 기대,
-    BLUE=오른쪽 기대)을 검출해 `/perception/cones`로 발행.
+    BLUE=오른쪽 기대)을 검출해 `/perception/cones`로 발행. `cv_bridge` 변환 실패(카메라가 bgr8로
+    못 바꾸는 인코딩을 보내는 경우 등)는 그 프레임만 버리고 노드는 계속 살아있는다(try/except).
   - `cone_detection.py`: `~/Desktop/EV_formula_camera`에서 그대로 포팅한 순수 HSV 검출 로직
     (`build_masks`/`find_cones`/`classify_side`/`detect_cones`) — 카메라 캡처는 이 파일에 없고
     ROS2 Image 구독(`cone_detector_node`)이 대신한다. HSV 임계값·면적·종횡비 기준은 원본 그대로.
 - **`ev_planning`** (ament_python) — `planning_node`: `/perception/obstacle` + `/perception/cones`
   구독, 20Hz로 `/vehicle_cmd` 발행. 우선순위: **라이다 장애물 정지 > 콘 트랙 추종**.
-  - 트랙 추종: 면적이 가장 큰(=가장 가까운) YELLOW/BLUE 콘 쌍의 이미지 x좌표 중점으로 조향각 계산
-    (`_compute_steering_deg`). 한쪽만 보이면 `assumed_track_half_width_px`만큼 반대쪽에 게이트가
-    있다고 가정. 둘 다 안 보이면(코너 진입 등) `search_throttle_percent`로 감속 직진.
+  - 트랙 추종: `side_ok=True`인(색상-위치 불일치 없는) 콘만 대상으로, 면적이 가장 큰(=가장 가까운)
+    YELLOW/BLUE 쌍의 이미지 x좌표 중점으로 조향각 계산(`_compute_steering_deg`). 한쪽만 보이면
+    `assumed_track_half_width_px`만큼 반대쪽에 게이트가 있다고 가정. 둘 다 안 보이면(코너 진입 등)
+    `search_throttle_percent`로 감속 직진.
   - 인지 자체가 끊기면(라이다든 카메라든 `perception_timeout_s` 초과) 무조건 정지 — 안전 기본값.
   - `max_steer_deg` 기본 25°는 실측값이 아니라 `henes_control.ino`의 실측 최대 조향각(±25°)을
     임시로 참고한 자리표시값이다 (TODO: EV_racing 실차로 교체).
@@ -124,8 +126,17 @@ PATH=/usr/bin:/usr/local/bin:/usr/sbin:/sbin:/bin:$PATH ros2 launch ev_bringup e
 EZkontrol_RearDrive_CAN.ino`를 열어 컴파일/업로드한다. 필요 라이브러리: `due_can`(Collin80,
 라이브러리 매니저), 보드 패키지: Arduino SAM Boards, 보드: Arduino Due.
 
-자동화된 테스트는 없다. `ev_perception`/`ev_planning`의 순수 로직(각도 필터링, 정지 판단)은
-REPL에서 바로 검증 가능하고, 아두이노/CAN 왕복과 시리얼 브릿지는 실물 하드웨어(EZkontrol
+`ev_perception`(콘 검출)과 `ev_planning`(조향 계산)에는 pytest 유닛 테스트가 있다(13개, 전부
+합성 데이터로 실카메라/실하드웨어 불필요):
+
+```bash
+source /opt/ros/humble/setup.bash
+source ros2_ws/install/setup.bash
+PATH=/usr/bin:/usr/local/bin:/usr/sbin:/sbin:/bin:$PATH /usr/bin/python3 -m pytest \
+  ros2_ws/src/ev_perception/test ros2_ws/src/ev_planning/test -v
+```
+
+그 외 자동화된 테스트는 없다. 아두이노/CAN 왕복과 시리얼 브릿지는 실물 하드웨어(EZkontrol
 컨트롤러, CAN 트랜시버, Due 보드)가 있어야 검증 가능하다. 단, 아두이노 스케치는 실제 Due 보드
 타겟(`arduino:sam:arduino_due_x_dbg`)으로 `--verify` 컴파일까지는 통과했다(2026-08-12).
 
@@ -134,9 +145,10 @@ REPL에서 바로 검증 가능하고, 아두이노/CAN 왕복과 시리얼 브�
 - [x] 후륜구동계 CAN 제어 아두이노 펌웨어 (핸드셰이크, 명령 인코딩, 텔레메트리 디코딩, 안전 워치독) — Due 보드 대상 컴파일 검증 완료
 - [x] ROS2 인지→판단→아두이노 브릿지 파이프라인 스캐폴드 (메시지, 노드, launch)
 - [x] ROS2 Humble(ros-base) 설치 및 colcon 빌드 검증
-- [x] 카메라 라바콘 인식(`~/Desktop/EV_formula_camera`)을 `ev_perception`의 `cone_detector_node`로 통합 — 합성 이미지로 검출 로직 스모크 테스트 완료(2026-08-12), 실카메라/실라바콘으로는 아직 미검증
+- [x] 카메라 라바콘 인식(`~/Desktop/EV_formula_camera`)을 `ev_perception`의 `cone_detector_node`로 통합 — pytest 유닛 테스트 6개로 검증(2026-08-12), 실카메라/실라바콘으로는 아직 미검증
 - [x] 라이다(`rplidar_ros`) 및 카메라(`v4l2_camera`) 드라이버를 `ev_bringup` launch에 추가 — rplidar_node는 위 "알려진 문제" 있음
-- [x] `ev_planning`에 콘 게이트 중심 추종 조향 로직 추가 (`_compute_steering_deg`, 유닛 테스트로 3가지 케이스 검증: 양쪽/한쪽만/미검출)
+- [x] `ev_planning`에 콘 게이트 중심 추종 조향 로직 추가 (`_compute_steering_deg`, pytest 유닛 테스트 7개: 양쪽/한쪽만/미검출/side_ok 필터/최대면적 선택/클램핑)
+- [x] `/code-review` 전체 리뷰(2026-08-12) 반영: (1) `_compute_steering_deg`가 `side_ok=False`(오검출 의심) 콘을 걸러내지 않던 버그 수정, (2) `cone_detector_node`의 `cv_bridge` 변환 실패가 노드를 죽이던 문제를 try/except로 방어, (3) "유닛 테스트로 검증" 주장을 실제 커밋된 pytest 파일로 뒷받침. 나머지 2개 지적(launch 인자 선언 패턴, `max()` 재계산)은 각각 `rplidar_ros` 공식 launch와 동일 관용구/의도적 방어 코드로 판단해 반영 안 함.
 - [ ] 실제 라바콘 트랙에서 HSV 임계값·`assumed_track_half_width_px`·`steer_gain_deg`·`max_steer_deg` 캘리브레이션 (전부 임의값/추정값)
 - [ ] 조향계/브레이크계(L7SA, Modbus RTU) 제어 인터페이스 — 별도 아두이노 또는 RS485 브릿지 필요, `VehicleCommand.steering_deg`/`brake_percent`는 계산되지만 아직 어떤 하드웨어도 소비하지 않음
 - [ ] 벤치 테스트로 `MAX_TARGET_CURRENT_A` 단계적 상향 및 실차 검증

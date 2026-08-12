@@ -65,9 +65,12 @@ class PlanningNode(Node):
 
         둘 다 보이면 그 중점, 한쪽만 보이면 반대쪽까지 assumed_track_half_width_px만큼
         떨어져 있다고 가정한 게이트 중심, 둘 다 안 보이면 None(조향 판단 불가).
+
+        side_ok가 False인 콘(색상 검출과 화면상 위치가 안 맞는 오검출 의심)은 제외한다 - 예를 들어
+        화면 오른쪽에서 잡힌 노란색 콘을 왼쪽 경계로 오인해 반대 방향으로 조향하는 걸 막기 위함.
         """
-        yellow = [c for c in cones.cones if c.color == 'YELLOW']
-        blue = [c for c in cones.cones if c.color == 'BLUE']
+        yellow = [c for c in cones.cones if c.color == 'YELLOW' and c.side_ok]
+        blue = [c for c in cones.cones if c.color == 'BLUE' and c.side_ok]
         nearest_yellow = max(yellow, key=lambda c: c.area, default=None)
         nearest_blue = max(blue, key=lambda c: c.area, default=None)
 
